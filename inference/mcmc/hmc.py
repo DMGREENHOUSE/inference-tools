@@ -98,6 +98,7 @@ class HamiltonianChain(MarkovChain):
             self.probs = [self.posterior(start) * self.inv_temp]
             self.leapfrog_steps = [0]
             self.n_parameters = len(start)
+            self.L = self.n_parameters
         self.chain_length = 1
 
         # set either the bounded or unbounded leapfrog update
