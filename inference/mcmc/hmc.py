@@ -201,8 +201,7 @@ class HamiltonianChain(MarkovChain):
             H0 = 0.5 * dot(r0, self.multiply_by_inv_mass(r0)) - self.probs[-1]
             r = copy(r0)
             t = copy(t0)
-            # g = self.grad(t) * self.inv_temp
-            g = self.calc_grad(t)
+            g = self.grad(t) * self.inv_temp
             n_steps = int(self.steps * (1 + (random() - 0.5) * self.steps_range_factor))
 
             t, r, g = self.run_leapfrog(t, r, g, n_steps)
