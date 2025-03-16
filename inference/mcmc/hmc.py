@@ -4,7 +4,13 @@ import matplotlib.pyplot as plt
 from numpy import ndarray, float64
 from numpy import array, savez, savez_compressed, load, zeros
 from numpy import sqrt, var, isfinite, exp, log, dot, mean, argmax, percentile
+from numpy import isscalar, eye, diag
 from numpy.random import default_rng
+from numpy.random import normal, random
+from numpy.linalg import cholesky as np_cholesky
+from numpy.linalg import inv as np_inv
+from scipy.linalg import cholesky as sp_cholesky
+from scipy.sparse import csr_matrix, issparse
 
 from inference.mcmc.utilities import Bounds, ChainProgressPrinter, effective_sample_size
 from inference.mcmc.base import MarkovChain
@@ -119,22 +125,101 @@ class HamiltonianChain(MarkovChain):
             display=self.display_progress, leading_msg="advancing chain:"
         )
 
+        self.handle_inverse_mass(inverse_mass)
+            
+    def handle_inverse_mass(self, inv_mass):
+        # set the inverse mass to 1 if none supplied
+        if inv_mass is None:
+            self.inv_mass = 1.0
+        else:
+            if isinstance(inv_mass, list):
+                inv_mass = array(inv_mass)
+            self.inv_mass = inv_mass
+
+        if isscalar(self.inv_mass):
+            self.variance = self.inv_mass
+            self.draw_normal = self.draw_normal
+        elif isinstance(self.inv_mass, ndarray):
+            ndim = self.inv_mass.ndim
+            if ndim == 1:
+                self.variance = self.inv_mass
+                self.verify_inverse_mass()
+                self.inv_mass = self.variance
+                self.draw_normal = self.draw_normal
+                self.chol_mass = eye(self.variance.shape[0]) * (1. / sqrt(self.inv_mass))
+            elif ndim == 2:
+                self.variance = diag(self.inv_mass)
+                self.mass = self.find_mass(self.inv_mass)
+                self.multiply_by_inv_mass = self.multiply_by_full_inv_mass
+                self.chol_mass = sp_cholesky(self.mass,
+                                                lower=True,
+                                                overwrite_a=False,
+                                                check_finite=False)
+
+                self.draw_normal = self.draw_normal_full_mass
+                # self.verify_inverse_mass()
+            else:
+                msg = f"Provided inverse mass has {ndim} dimensions. Must be (1, 2)"
+                raise ValueError(msg)
+        else:
+            msg = f"Provided inverse mass has type {type(self.inv_mass)}. Must be (scalar, vector, matrix)"
+            raise ValueError(msg)
+
+    def multiply_by_inv_mass(self, x):
+        return self.inv_mass * x
+
+    def multiply_by_full_inv_mass(self, x):
+        return self.inv_mass @ x
+
+    def draw_normal(self):
+        return normal(size=self.L) / sqrt(self.inv_mass)
+
+    def draw_normal_full_mass(self):
+        Z = normal(size=self.L)
+        X = dot(self.chol_mass, Z).T  # transpose to get samples as rows
+        return X
+    
+    def find_mass(self, inv_mass, is_sparse=False):
+        # this implicitly checks inv_mass is positive definite
+        chol_l = np_cholesky(inv_mass)
+        chol_l_inv = np_inv(chol_l)
+        mass = chol_l_inv.T @ chol_l_inv
+
+        if is_sparse:
+            mass = csr_matrix(mass)
+        return mass
+    
     def take_step(self):
         """
         Takes the next step in the HMC-chain
         """
         steps_taken = 0
         for attempt in range(self.max_attempts):
-            r0 = self.rng.normal(size=self.n_parameters, scale=self.sqrt_mass)
+            r0 = self.draw_normal()
             t0 = self.theta[-1]
-            H0 = 0.5 * dot(r0, r0 * self.inv_mass) - self.probs[-1]
+            H0 = 0.5 * dot(r0, self.multiply_by_inv_mass(r0)) - self.probs[-1]
+            r = copy(r0)
+            t = copy(t0)
+            # g = self.grad(t) * self.inv_temp
+            g = self.calc_grad(t)
+            n_steps = int(self.steps * (1 + (random() - 0.5) * self.steps_range_factor))
 
-            n_steps = int(self.steps * (1 + (self.rng.random() - 0.5) * 0.2))
-            t, r = self.run_leapfrog(t0.copy(), r0.copy(), n_steps)
-
+            t, r, g = self.run_leapfrog(t, r, g, n_steps)
             steps_taken += n_steps
-            p = self.posterior(t) * self.inv_temp
-            H = 0.5 * dot(r, r * self.inv_mass) - p
+            # p = self.posterior(t) * self.inv_temp
+            p = self.calc_prob(t)
+            H = 0.5 * dot(r, self.multiply_by_inv_mass(r)) - p
+
+            # r0 = self.rng.normal(size=self.n_parameters, scale=self.sqrt_mass)
+            # t0 = self.theta[-1]
+            # H0 = 0.5 * dot(r0, r0 * self.inv_mass) - self.probs[-1]
+
+            # n_steps = int(self.steps * (1 + (self.rng.random() - 0.5) * 0.2))
+            # t, r = self.run_leapfrog(t0.copy(), r0.copy(), n_steps)
+
+            # steps_taken += n_steps
+            # p = self.posterior(t) * self.inv_temp
+            # H = 0.5 * dot(r, r * self.inv_mass) - p
             accept_prob = exp(H0 - H)
 
             self.ES.add_probability(
@@ -159,35 +244,40 @@ class HamiltonianChain(MarkovChain):
     def standard_leapfrog(
         self, t: ndarray, r: ndarray, n_steps: int
     ) -> tuple[ndarray, ndarray]:
-        t_step = self.inv_mass * self.ES.epsilon
+        # t_step = self.inv_mass * self.ES.epsilon
         r_step = self.inv_temp * self.ES.epsilon
         r += (0.5 * r_step) * self.grad(t)
         for _ in range(n_steps - 1):
-            t += t_step * r
+            # t += t_step * r
+            t += self.ES.epsilon * self.multiply_by_inv_mass(r)
             r += r_step * self.grad(t)
-        t += t_step * r
+        # t += t_step * r
+        t += self.ES.epsilon * self.multiply_by_inv_mass(r)
         r += (0.5 * r_step) * self.grad(t)
         return t, r
 
     def bounded_leapfrog(
         self, t: ndarray, r: ndarray, n_steps: int
     ) -> tuple[ndarray, ndarray]:
-        t_step = self.inv_mass * self.ES.epsilon
+        # t_step = self.inv_mass * self.ES.epsilon
         r_step = self.inv_temp * self.ES.epsilon
         r += (0.5 * r_step) * self.grad(t)
         for _ in range(n_steps - 1):
-            t += t_step * r
+            # t += t_step * r
+            t += self.ES.epsilon * self.multiply_by_inv_mass(r)
             t, reflections = self.bounds.reflect_momenta(t)
             r *= reflections
             r += r_step * self.grad(t)
-        t += t_step * r
+        # t += t_step * r
+        t += self.ES.epsilon * self.multiply_by_inv_mass(r)
         t, reflections = self.bounds.reflect_momenta(t)
         r *= reflections
         r += (0.5 * r_step) * self.grad(t)
         return t, r
 
     def hamiltonian(self, t: ndarray, r: ndarray) -> float:
-        return 0.5 * dot(r, r * self.inv_mass) - self.posterior(t) * self.inv_temp
+        # return 0.5 * dot(r, r * self.inv_mass) - self.posterior(t) * self.inv_temp
+        return 0.5 * dot(r, self.multiply_by_inv_mass(r)) - self.calc_prob(t) * self.inv_temp
 
     def estimate_mass(self, burn=1, thin=1):
         self.inv_mass = var(array(self.theta[burn::thin]), axis=0)
