@@ -85,7 +85,7 @@ class HamiltonianChain(MarkovChain):
 
         # set the inverse mass to 1 if none supplied
         self.inv_mass = 1.0 if inverse_mass is None else inverse_mass
-        self.sqrt_mass = 1.0 / sqrt(self.inv_mass)
+        # self.sqrt_mass = 1.0 / sqrt(self.inv_mass)
         self.temperature = temperature
         self.inv_temp = 1.0 / temperature
 
