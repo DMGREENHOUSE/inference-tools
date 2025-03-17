@@ -201,25 +201,13 @@ class HamiltonianChain(MarkovChain):
             H0 = 0.5 * dot(r0, self.multiply_by_inv_mass(r0)) - self.probs[-1]
             r = copy(r0)
             t = copy(t0)
-            g = self.grad(t) * self.inv_temp
-            n_steps = int(self.steps * (1 + (random() - 0.5) * self.steps_range_factor))
+            n_steps = int(self.steps * (1 + (random() - 0.5) * 0.2))
 
-            t, r, g = self.run_leapfrog(t, r, g, n_steps)
+            t, r = self.run_leapfrog(t, r, n_steps)
             steps_taken += n_steps
             # p = self.posterior(t) * self.inv_temp
-            p = self.calc_prob(t)
+            p = self.posterior(t)
             H = 0.5 * dot(r, self.multiply_by_inv_mass(r)) - p
-
-            # r0 = self.rng.normal(size=self.n_parameters, scale=self.sqrt_mass)
-            # t0 = self.theta[-1]
-            # H0 = 0.5 * dot(r0, r0 * self.inv_mass) - self.probs[-1]
-
-            # n_steps = int(self.steps * (1 + (self.rng.random() - 0.5) * 0.2))
-            # t, r = self.run_leapfrog(t0.copy(), r0.copy(), n_steps)
-
-            # steps_taken += n_steps
-            # p = self.posterior(t) * self.inv_temp
-            # H = 0.5 * dot(r, r * self.inv_mass) - p
             accept_prob = exp(H0 - H)
 
             self.ES.add_probability(
@@ -277,7 +265,7 @@ class HamiltonianChain(MarkovChain):
 
     def hamiltonian(self, t: ndarray, r: ndarray) -> float:
         # return 0.5 * dot(r, r * self.inv_mass) - self.posterior(t) * self.inv_temp
-        return 0.5 * dot(r, self.multiply_by_inv_mass(r)) - self.calc_prob(t) * self.inv_temp
+        return 0.5 * dot(r, self.multiply_by_inv_mass(r)) - self.posterior(t) * self.inv_temp
 
     def estimate_mass(self, burn=1, thin=1):
         self.inv_mass = var(array(self.theta[burn::thin]), axis=0)
