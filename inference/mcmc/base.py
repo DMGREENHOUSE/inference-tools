@@ -68,7 +68,7 @@ class MarkovChain(ABC):
             # set the interval such that updates are roughly once per second
             steps_taken = self.chain_length - start_length
             current_time = time()
-            update_interval = int(steps_taken / (current_time - start_time))
+            update_interval = int(max(1, steps_taken / (current_time - start_time)))
             self.ProgressPrinter.countdown_progress(end_time, steps_taken)
         self.ProgressPrinter.countdown_final(run_time, steps_taken)
 
